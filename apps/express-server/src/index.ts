@@ -1,6 +1,11 @@
 import express from "express";
 import { createClient } from "redis";
 import cors from "cors";
+import path from "path";
+import dotenv from "dotenv";
+
+// Load .env using explicit path so it works with PM2
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
 app.use(express.json());
@@ -35,9 +40,6 @@ app.post("/submit", async (req, res) => {
 });
 
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION as string,
