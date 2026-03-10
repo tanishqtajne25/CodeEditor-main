@@ -89,7 +89,12 @@ async function process() {
         })
       );
     }
-    const color = getColorFromUserId(userId || "");
+    // Assign color based on join order so every user gets a distinct color
+    const palette = [
+      "#E040FB", "#00BCD4", "#4CAF50", "#FF9800", "#FF5252",
+      "#7C4DFF", "#03A9F4", "#8BC34A", "#FFD740", "#F06292",
+    ];
+    const color = palette[rooms[roomId].length % palette.length];
     rooms[roomId].push({
       userId,
       ws,
