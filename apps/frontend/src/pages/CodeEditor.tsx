@@ -54,11 +54,25 @@ const CodeEditor: React.FC = () => {
   const [remotePresenceMap, setRemotePresenceMap] = useState<Record<string, RemotePresence>>({});
   const [now, setNow] = useState(Date.now());
 
+  // Keep refs in sync with state so the stable onmessage handler always reads fresh values
+  useEffect(() => { codeRef.current = code; }, [code]);
+  useEffect(() => { inputRef.current = input; }, [input]);
+  useEffect(() => { languageRef.current = language; }, [language]);
+  useEffect(() => { currentButtonStateRef.current = currentButtonState; }, [currentButtonState]);
+  useEffect(() => { isLoadingRef.current = isLoading; }, [isLoading]);
+
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
   const decorationIdsRef = useRef<Record<string, string[]>>({});
   const selectionStyleRef = useRef<Record<string, HTMLStyleElement>>({});
   const latestPresenceRef = useRef<Record<string, RemotePresence>>({});
+
+  // Refs to hold latest state for use inside the stable onmessage handler
+  const codeRef = useRef(code);
+  const inputRef = useRef(input);
+  const languageRef = useRef(language);
+  const currentButtonStateRef = useRef(currentButtonState);
+  const isLoadingRef = useRef(isLoading);
   const navigate = useNavigate();
 
 
@@ -118,135 +132,129 @@ const CodeEditor: React.FC = () => {
   useEffect(() => {
     if (!socket) {
       navigate("/" + parms.roomId);
+      return;
     }
-    else {
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        // on change of user
-        if (data.type === "users") {
-          setConnectedUsers(data.users);
-          setRemotePresenceMap((previousMap) => {
-            const validIds = new Set((data.users || []).map((connectedUser: any) => connectedUser.id));
-            const nextMap: Record<string, RemotePresence> = {};
 
-            Object.keys(previousMap).forEach((key) => {
-              if (validIds.has(key)) {
-                nextMap[key] = previousMap[key];
-              }
-            });
+    // Register onmessage ONCE (empty dep array = stable handler, no re-registration on every keystroke)
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
 
-            latestPresenceRef.current = nextMap;
-            return nextMap;
+      // on change of user
+      if (data.type === "users") {
+        setConnectedUsers(data.users);
+        setRemotePresenceMap((previousMap) => {
+          const validIds = new Set((data.users || []).map((connectedUser: any) => connectedUser.id));
+          const nextMap: Record<string, RemotePresence> = {};
+          Object.keys(previousMap).forEach((key) => {
+            if (validIds.has(key)) nextMap[key] = previousMap[key];
           });
-        }
-        // on change of code
-        if (data.type === "code") {
-          setCode(data.code);
-        }
+          latestPresenceRef.current = nextMap;
+          return nextMap;
+        });
+      }
 
-        // on change of input
-        if (data.type === "input") {
-          setInput(data.input);
-        }
+      // on change of code
+      if (data.type === "code") {
+        setCode(data.code);
+      }
 
-        // on change of language
-        if (data.type === "language") {
-          setLanguage(data.language);
-        }
+      // on change of input
+      if (data.type === "input") {
+        setInput(data.input);
+      }
 
-        // on change of Submit Button Status
-        if (data.type === "submitBtnStatus") {
-          setCurrentButtonState(data.value);
-          setIsLoading(data.isLoading);
-        }
+      // on change of language
+      if (data.type === "language") {
+        setLanguage(data.language);
+      }
 
-        // on change of output
-        if (data.type === "output") {
-          setOutput((prevOutput) => [...prevOutput, data.message]);
-          handleButtonStatus("Submit Code", false);
-        }
+      // on change of Submit Button Status
+      if (data.type === "submitBtnStatus") {
+        setCurrentButtonState(data.value);
+        setIsLoading(data.isLoading);
+      }
 
-        if (data.type === "presenceUpdate") {
-          if (data.userId === user.id) {
-            return;
-          }
+      // on change of output
+      if (data.type === "output") {
+        setOutput((prevOutput) => [...prevOutput, data.message]);
+        // Use direct state setters inline to avoid stale closure
+        setCurrentButtonState("Submit Code");
+        setIsLoading(false);
+        socket?.send(JSON.stringify({ type: "submitBtnStatus", value: "Submit Code", isLoading: false, roomId: user.roomId }));
+      }
 
-          setRemotePresenceMap((previousMap) => {
-            const nextMap = {
-              ...previousMap,
-              [data.userId]: {
-                userId: data.userId,
-                name: data.name,
-                color: data.color,
-                position: data.position,
-                selection: data.selection,
-                lastSeen: Date.now(),
-              },
-            };
-            latestPresenceRef.current = nextMap;
-            return nextMap;
-          });
-        }
-
-        if (data.type === "presenceSnapshot") {
-          const snapshotEntries = (data.users || []).map((presence: any) => [
-            presence.userId,
-            {
-              userId: presence.userId,
-              name: presence.name,
-              color: presence.color,
-              position: presence.position,
-              selection: presence.selection,
+      if (data.type === "presenceUpdate") {
+        if (data.userId === user.id) return;
+        setRemotePresenceMap((previousMap) => {
+          const nextMap = {
+            ...previousMap,
+            [data.userId]: {
+              userId: data.userId,
+              name: data.name,
+              color: data.color,
+              position: data.position,
+              selection: data.selection,
               lastSeen: Date.now(),
             },
-          ]);
+          };
+          latestPresenceRef.current = nextMap;
+          return nextMap;
+        });
+      }
 
-          setRemotePresenceMap((previousMap) => {
-            const nextMap = {
-              ...previousMap,
-              ...Object.fromEntries(snapshotEntries),
-            };
-            latestPresenceRef.current = nextMap;
-            return nextMap;
-          });
-        }
+      if (data.type === "presenceSnapshot") {
+        const snapshotEntries = (data.users || []).map((presence: any) => [
+          presence.userId,
+          {
+            userId: presence.userId,
+            name: presence.name,
+            color: presence.color,
+            position: presence.position,
+            selection: presence.selection,
+            lastSeen: Date.now(),
+          },
+        ]);
+        setRemotePresenceMap((previousMap) => {
+          const nextMap = { ...previousMap, ...Object.fromEntries(snapshotEntries) };
+          latestPresenceRef.current = nextMap;
+          return nextMap;
+        });
+      }
 
-        if (data.type === "presenceRemove") {
-          setRemotePresenceMap((previousMap) => {
-            const nextMap = { ...previousMap };
-            delete nextMap[data.userId];
-            latestPresenceRef.current = nextMap;
-            return nextMap;
-          });
-        }
+      if (data.type === "presenceRemove") {
+        setRemotePresenceMap((previousMap) => {
+          const nextMap = { ...previousMap };
+          delete nextMap[data.userId];
+          latestPresenceRef.current = nextMap;
+          return nextMap;
+        });
+      }
 
-        // send all data to new user on join  
-        if (data.type === "requestForAllData") {
-          socket?.send(
-            JSON.stringify({
-              type: "allData",
-              code: code,
-              input: input,
-              language: language,
-              currentButtonState: currentButtonState,
-              isLoading: isLoading,
-              userId: data.userId
-            })
-          );
-        }
+      // Send all data to new user on join — read from refs to get CURRENT values, not stale closure values
+      if (data.type === "requestForAllData") {
+        socket?.send(
+          JSON.stringify({
+            type: "allData",
+            code: codeRef.current,
+            input: inputRef.current,
+            language: languageRef.current,
+            currentButtonState: currentButtonStateRef.current,
+            isLoading: isLoadingRef.current,
+            userId: data.userId,
+          })
+        );
+      }
 
-        // on receive all data
-        if (data.type === "allData") {
-          setCode(data.code);
-          setInput(data.input);
-          setLanguage(data.language);
-          setCurrentButtonState(data.currentButtonState);
-          setIsLoading(data.isLoading);
-        }
-
-      };
-    }
-  }, [code, input, language, currentButtonState, isLoading]);
+      // on receive all data
+      if (data.type === "allData") {
+        setCode(data.code);
+        setInput(data.input);
+        setLanguage(data.language);
+        setCurrentButtonState(data.currentButtonState);
+        setIsLoading(data.isLoading);
+      }
+    };
+  }, []); // ✅ Empty deps — handler registered once, reads fresh values via refs
 
   const getSelectionClassName = (userId: string, color: string) => {
     const className = `remote-selection-${toCssSafeId(userId)}`;
