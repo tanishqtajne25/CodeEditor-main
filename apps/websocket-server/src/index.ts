@@ -109,7 +109,7 @@ async function process() {
         userId: user.userId,
         name: user.name,
         color: user.color,
-        position: user.presence.position,
+        cursor: user.presence.cursor,
         selection: user.presence.selection,
       }));
 
@@ -245,7 +245,7 @@ async function process() {
         }
 
         currentUser.presence = {
-          position: data.position,
+          cursor: data.cursor,
           selection: data.selection,
         };
 
@@ -257,7 +257,7 @@ async function process() {
                 userId: userId,
                 name: currentUser.name,
                 color: currentUser.color,
-                position: data.position,
+                cursor: data.cursor,
                 selection: data.selection,
               })
             );

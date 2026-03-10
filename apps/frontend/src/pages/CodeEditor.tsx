@@ -12,13 +12,15 @@ type RemotePresence = {
   userId: string;
   name: string;
   color: string;
-  position: {
-    x: number;
-    y: number;
+  cursor: {
+    lineNumber: number;
+    column: number;
   };
   selection: {
-    start: number;
-    end: number;
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber: number;
+    endColumn: number;
   };
   lastSeen: number;
 };
@@ -52,7 +54,6 @@ const CodeEditor: React.FC = () => {
   const [input, setInput] = useState<string>(""); // Input for code
   const [user, setUser] = useRecoilState(userAtom);
   const [remotePresenceMap, setRemotePresenceMap] = useState<Record<string, RemotePresence>>({});
-  const [now, setNow] = useState(Date.now());
 
   // Keep refs in sync with state so the stable onmessage handler always reads fresh values
   useEffect(() => { codeRef.current = code; }, [code]);
@@ -81,15 +82,7 @@ const CodeEditor: React.FC = () => {
   const [connectedUsers, setConnectedUsers] = useRecoilState<any[]>(connectedUsersAtom);
   const parms = useParams();
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNow(Date.now());
-    }, 400);
 
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, []);
 
   // WebSocket connection logic
   useEffect(() => {
@@ -192,7 +185,7 @@ const CodeEditor: React.FC = () => {
               userId: data.userId,
               name: data.name,
               color: data.color,
-              position: data.position,
+              cursor: data.cursor,
               selection: data.selection,
               lastSeen: Date.now(),
             },
@@ -209,7 +202,7 @@ const CodeEditor: React.FC = () => {
             userId: presence.userId,
             name: presence.name,
             color: presence.color,
-            position: presence.position,
+            cursor: presence.cursor,
             selection: presence.selection,
             lastSeen: Date.now(),
           },
@@ -256,22 +249,44 @@ const CodeEditor: React.FC = () => {
     };
   }, []); // ✅ Empty deps — handler registered once, reads fresh values via refs
 
-  const getSelectionClassName = (userId: string, color: string) => {
-    const className = `remote-selection-${toCssSafeId(userId)}`;
+  const getOrCreateStyle = (userId: string, color: string) => {
+    const safeId = toCssSafeId(userId);
+    const selClass = `remote-selection-${safeId}`;
+    const cursorClass = `remote-cursor-${safeId}`;
+    const labelClass = `remote-cursor-label-${safeId}`;
 
-    if (!selectionStyleRef.current[className]) {
+    if (!selectionStyleRef.current[selClass]) {
       const styleElement = document.createElement("style");
       styleElement.innerHTML = `
-        .${className} {
+        .${selClass} {
           background-color: ${toRgba(color, 0.25)};
           border-bottom: 1px solid ${toRgba(color, 0.8)};
         }
+        .${cursorClass} {
+          border-left: 2px solid ${color} !important;
+          margin-left: -1px;
+        }
+        .${labelClass} {
+          position: relative;
+        }
+        .${labelClass}::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: -1px;
+          width: 0;
+          height: 0;
+          border-left: 4px solid ${color};
+          border-right: 4px solid transparent;
+          border-top: 4px solid ${color};
+          border-bottom: 4px solid transparent;
+        }
       `;
       document.head.appendChild(styleElement);
-      selectionStyleRef.current[className] = styleElement;
+      selectionStyleRef.current[selClass] = styleElement;
     }
 
-    return className;
+    return { selClass, cursorClass, labelClass };
   };
 
   useEffect(() => {
@@ -286,41 +301,58 @@ const CodeEditor: React.FC = () => {
     const activeIds = new Set<string>();
 
     Object.values(remotePresenceMap).forEach((presence) => {
-      if (presence.userId === user.id || !presence.selection) {
+      if (presence.userId === user.id || !presence.cursor) {
         return;
       }
 
-      const startOffset = Math.max(0, Math.min(presence.selection.start, model.getValueLength()));
-      const endOffset = Math.max(0, Math.min(presence.selection.end, model.getValueLength()));
+      const { selClass, cursorClass, labelClass } = getOrCreateStyle(presence.userId, presence.color);
+      const decorations: any[] = [];
 
-      if (startOffset === endOffset) {
-        if (decorationIdsRef.current[presence.userId]?.length) {
-          decorationIdsRef.current[presence.userId] = editor.deltaDecorations(
-            decorationIdsRef.current[presence.userId],
-            []
-          );
-        }
-        return;
-      }
-
-      const startPosition = model.getPositionAt(Math.min(startOffset, endOffset));
-      const endPosition = model.getPositionAt(Math.max(startOffset, endOffset));
-      const className = getSelectionClassName(presence.userId, presence.color);
-
-      const decorations = [
-        {
-          range: new monaco.Range(
-            startPosition.lineNumber,
-            startPosition.column,
-            endPosition.lineNumber,
-            endPosition.column
-          ),
-          options: {
-            className,
-            isWholeLine: false,
-          },
+      // Always render cursor bar at the remote user's line/column
+      decorations.push({
+        range: new monaco.Range(
+          presence.cursor.lineNumber,
+          presence.cursor.column,
+          presence.cursor.lineNumber,
+          presence.cursor.column
+        ),
+        options: {
+          className: cursorClass,
+          isWholeLine: false,
+          stickiness: 1, // NeverGrowsWhenTypingAtEdges
         },
-      ];
+      });
+
+      // Render the colored top-flag (triangle) at cursor position
+      decorations.push({
+        range: new monaco.Range(
+          presence.cursor.lineNumber,
+          presence.cursor.column,
+          presence.cursor.lineNumber,
+          presence.cursor.column
+        ),
+        options: {
+          className: labelClass,
+          isWholeLine: false,
+          stickiness: 1,
+          hoverMessage: { value: presence.name },
+        },
+      });
+
+      // Render selection highlight if the remote user has a text selection
+      if (presence.selection) {
+        const { startLineNumber, startColumn, endLineNumber, endColumn } = presence.selection;
+        const hasSelection = startLineNumber !== endLineNumber || startColumn !== endColumn;
+        if (hasSelection) {
+          decorations.push({
+            range: new monaco.Range(startLineNumber, startColumn, endLineNumber, endColumn),
+            options: {
+              className: selClass,
+              isWholeLine: false,
+            },
+          });
+        }
+      }
 
       decorationIdsRef.current[presence.userId] = editor.deltaDecorations(
         decorationIdsRef.current[presence.userId] || [],
@@ -329,6 +361,7 @@ const CodeEditor: React.FC = () => {
       activeIds.add(presence.userId);
     });
 
+    // Clean up decorations for users no longer present
     Object.keys(decorationIdsRef.current).forEach((presenceUserId) => {
       if (!activeIds.has(presenceUserId)) {
         decorationIdsRef.current[presenceUserId] = editor.deltaDecorations(
@@ -481,22 +514,18 @@ const CodeEditor: React.FC = () => {
         return;
       }
 
-      const visiblePosition = currentEditor.getScrolledVisiblePosition(position);
-
-      if (!visiblePosition) {
-        return;
-      }
-
       const payload = {
         type: "cursorPresence",
         roomId: user.roomId,
-        position: {
-          x: visiblePosition.left,
-          y: visiblePosition.top + visiblePosition.height,
+        cursor: {
+          lineNumber: position.lineNumber,
+          column: position.column,
         },
         selection: {
-          start: model.getOffsetAt(selection.getStartPosition()),
-          end: model.getOffsetAt(selection.getEndPosition()),
+          startLineNumber: selection.startLineNumber,
+          startColumn: selection.startColumn,
+          endLineNumber: selection.endLineNumber,
+          endColumn: selection.endColumn,
         },
       };
 
@@ -771,43 +800,7 @@ const CodeEditor: React.FC = () => {
               }}
             />
 
-            <div className="pointer-events-none absolute inset-0 z-20">
-              {Object.values(remotePresenceMap)
-                .filter((presence) => presence.userId !== user.id && presence.position)
-                .map((presence) => {
-                  const idleTime = now - presence.lastSeen;
-                  const maxIdle = 3000;
-                  const opacity = Math.max(0, 1 - idleTime / maxIdle);
-
-                  return (
-                    <div
-                      key={presence.userId}
-                      className="absolute transition-all duration-150 ease-linear"
-                      style={{
-                        transform: `translate(${presence.position.x}px, ${presence.position.y}px)`,
-                        opacity,
-                      }}
-                    >
-                      <div
-                        className="absolute -top-7 left-2 px-2 py-1 rounded text-[11px] font-semibold whitespace-nowrap"
-                        style={{
-                          backgroundColor: toRgba(presence.color, 0.95),
-                          color: "#111111",
-                        }}
-                      >
-                        {presence.name}
-                      </div>
-                      <div
-                        className="w-3 h-3 rotate-45 border-2 rounded-sm"
-                        style={{
-                          borderColor: presence.color,
-                          backgroundColor: "#1e1e1e",
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-            </div>
+            {/* Remote cursors are now rendered as Monaco editor decorations — no overlay needed */}
           </div>
 
           <div className="h-56 bg-[#252526] border-t border-[#3c3c3c] flex flex-col">
