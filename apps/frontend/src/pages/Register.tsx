@@ -82,6 +82,12 @@ const Register = () => {
                 console.log("WebSocket connection closed from register page");
                 setLoading(false);
             };
+            
+            ws.onerror = (error) => {
+                console.error("WebSocket connection error:", error);
+                setLoading(false);
+                alert("Could not connect to the server. Please check your connection or server IP address.");
+            };
 
         }
         else {
