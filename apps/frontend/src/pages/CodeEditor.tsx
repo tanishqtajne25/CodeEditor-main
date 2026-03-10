@@ -74,6 +74,7 @@ const CodeEditor: React.FC = () => {
   const languageRef = useRef(language);
   const currentButtonStateRef = useRef(currentButtonState);
   const isLoadingRef = useRef(isLoading);
+  const isRemoteUpdateRef = useRef(false); // flag to prevent echo on remote code updates
   const navigate = useNavigate();
 
 
@@ -146,8 +147,38 @@ const CodeEditor: React.FC = () => {
         });
       }
 
-      // on change of code
+      // on change of code — update editor model directly, preserving local cursor
       if (data.type === "code") {
+        const editor = editorRef.current;
+        if (editor) {
+          const model = editor.getModel();
+          if (model && model.getValue() !== data.code) {
+            // Save local cursor position before replacing content
+            const currentPosition = editor.getPosition();
+            const currentSelections = editor.getSelections();
+
+            isRemoteUpdateRef.current = true;
+            // Use pushEditOperations to replace content without resetting cursor
+            model.pushEditOperations(
+              currentSelections || [],
+              [{
+                range: model.getFullModelRange(),
+                text: data.code,
+              }],
+              () => currentSelections || []
+            );
+            isRemoteUpdateRef.current = false;
+
+            // Restore cursor position (clamp to valid range)
+            if (currentPosition) {
+              const maxLine = model.getLineCount();
+              const clampedLine = Math.min(currentPosition.lineNumber, maxLine);
+              const maxCol = model.getLineMaxColumn(clampedLine);
+              const clampedCol = Math.min(currentPosition.column, maxCol);
+              editor.setPosition({ lineNumber: clampedLine, column: clampedCol });
+            }
+          }
+        }
         setCode(data.code);
       }
 
@@ -543,12 +574,15 @@ const CodeEditor: React.FC = () => {
 
       // handle code change multiple user
       editor.onDidChangeModelContent(() => {
-        console.log("Code Updated:", editor.getValue());
-        setCode(editor.getValue());
+        // Skip if this change was triggered by a remote update (prevents echo)
+        if (isRemoteUpdateRef.current) return;
+
+        const value = editor.getValue();
+        setCode(value);
         socket?.send(
           JSON.stringify({
             type: "code",
-            code: editor.getValue(),
+            code: value,
             roomId: user.roomId
           })
         );
