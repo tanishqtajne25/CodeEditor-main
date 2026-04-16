@@ -1,67 +1,94 @@
 #!/bin/bash
-# CodeEditor EC2 Deployment Script
-# This script is designed to be pasted into the "User Data" section when launching an Ubuntu EC2 instance.
+# CodeEditor EC2 Deployment Script (Launch Template User Data)
+# Ubuntu 24.04 LTS — Docker Redis (local, free-tier safe)
+# This script is pasted verbatim into the Launch Template "User Data" field.
 
 set -e  # Exit on any error
 
-# 0. Create swap space (t3.micro only has 1GB RAM, npm needs more)
-sudo fallocate -l 2G /swapfile
-sudo chmod 600 /swapfile
-sudo mkswap /swapfile
-sudo swapon /swapfile
+# ── 0. Swap space (t3.micro = 1 GB RAM; npm build needs breathing room) ──────
+fallocate -l 2G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab   # persist across reboots
 
-# 1. Update system and install dependencies
-sudo apt-get update -y
-sudo apt-get install -y curl git
+# ── 1. System packages ─────────────────────────────────────────────────────────
+apt-get update -y
+apt-get install -y curl git apt-transport-https ca-certificates \
+                   software-properties-common
 
-# 2. Install Node.js (v20)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
+# ── 2. Node.js v20 ────────────────────────────────────────────────────────────
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
 
-# 3. Install Docker (for Redis)
-sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-sudo add-apt-repository -y "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-sudo apt-get update -y
-sudo apt-get install -y docker-ce
-sudo systemctl enable docker
-sudo systemctl start docker
-sudo usermod -aG docker ubuntu
+# ── 3. Docker (used for Redis + code-execution sandboxes) ─────────────────────
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+  > /etc/apt/sources.list.d/docker.list
+apt-get update -y
+apt-get install -y docker-ce docker-ce-cli containerd.io
+systemctl enable docker
+systemctl start docker
+usermod -aG docker ubuntu
 
-# 4. Clone the repository
+# ── 4. Start Redis (local, Docker-based — free-tier safe) ─────────────────────
+docker run -d \
+  --name redis-server \
+  --restart unless-stopped \
+  -p 6379:6379 \
+  redis:7
+
+# ── 5. Clone the repository ───────────────────────────────────────────────────
 git clone https://github.com/tanishqtajne25/CodeEditor-main.git /home/ubuntu/CodeEditor
 cd /home/ubuntu/CodeEditor
 
-# 5. Create .env file for the express server
-# NOTE: Replace these values with your actual AWS keys before running!
-cat > apps/express-server/.env << 'ENVFILE'
-AWS_REGION=ap-south-1
-AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY_HERE
-AWS_SECRET_ACCESS_KEY=YOUR_SECRET_KEY_HERE
-AWS_S3_BUCKET_NAME=code-editor-snippets-tanishq
-ENVFILE
+# ── 6. Environment variables ──────────────────────────────────────────────────
+# Redis points to the local Docker container on this same instance.
+# AWS credentials are picked up from the attached IAM Instance Profile (CodeEditor-EC2-Role).
+# VITE_BACKEND_HOST must match your ALB DNS name — set it BEFORE running npm run build.
 
-# 6. Install project dependencies and build
+cat > apps/express-server/.env << 'ENVEOF'
+REDIS_URL=redis://localhost:6379
+AWS_REGION=ap-south-1
+AWS_S3_BUCKET_NAME=code-editor-snippets-tanishq
+ENVEOF
+
+cat > apps/websocket-server/.env << 'ENVEOF'
+REDIS_URL=redis://localhost:6379
+ENVEOF
+
+cat > apps/worker/.env << 'ENVEOF'
+REDIS_URL=redis://localhost:6379
+ENVEOF
+
+# Frontend: embed the ALB DNS name at build time
+# Replace the value below with your actual ALB DNS before baking the AMI!
+cat > apps/frontend/.env << 'ENVEOF'
+VITE_BACKEND_HOST=CodeEditor-ALB-1911604777.ap-south-1.elb.amazonaws.com
+ENVEOF
+
+# ── 7. Install dependencies & build all packages ──────────────────────────────
 npm install
 npm run build
 
-# 7. Start Redis
-sudo docker compose up -d
-
-# 8. Install PM2 to run the Node.js services in the background
-sudo npm install -g pm2
-
-# 9. Fix ownership so ubuntu user owns the project
+# ── 8. Fix ownership ──────────────────────────────────────────────────────────
 chown -R ubuntu:ubuntu /home/ubuntu/CodeEditor
 
-# 10. Start the 3 backend services using PM2 as the ubuntu user
-sudo -u ubuntu bash -c 'cd /home/ubuntu/CodeEditor && pm2 start apps/express-server/dist/index.js --name "express-server"'
-sudo -u ubuntu bash -c 'cd /home/ubuntu/CodeEditor && pm2 start apps/websocket-server/dist/index.js --name "websocket-server"'
-sudo -u ubuntu bash -c 'cd /home/ubuntu/CodeEditor && pm2 start apps/worker/dist/index.js --name "worker"'
+# ── 9. Install PM2 and start all 3 backend services ──────────────────────────
+npm install -g pm2
 
-# Save PM2 process list to start on boot
-sudo -u ubuntu bash -c 'pm2 save'
-sudo -u ubuntu bash -c 'pm2 startup systemd -u ubuntu --hp /home/ubuntu'
-sudo env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
+sudo -u ubuntu bash -c '
+  cd /home/ubuntu/CodeEditor
+  pm2 start apps/express-server/dist/index.js   --name "express-server"
+  pm2 start apps/websocket-server/dist/index.js --name "websocket-server"
+  pm2 start apps/worker/dist/index.js           --name "worker"
+  pm2 save
+'
 
-echo "Deployment complete! Your backend services are running."
+# Make PM2 auto-start on system reboot
+env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
+
+echo "=== CodeEditor deployment complete! ==="
+echo "  Express  -> http://localhost:3000"
+echo "  WS       -> ws://localhost:5000"
+echo "  Redis    -> localhost:6379 (Docker)"

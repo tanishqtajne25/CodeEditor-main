@@ -23,8 +23,9 @@ if (cluster.isPrimary) {
     console.log(`Worker ${newWorker.process.pid} started`);
   });
 } else {
-  const client = createClient();
-  const pubClient = createClient();
+  const redisOptions = process.env.REDIS_URL ? { url: process.env.REDIS_URL } : undefined;
+  const client = createClient(redisOptions);
+  const pubClient = createClient(redisOptions);
 
   async function processSubmission(submission: any) {
     const { code, language, roomId, submissionId, input } =
@@ -50,31 +51,19 @@ if (cluster.isPrimary) {
         case "javascript":
           codeFilePath = path.join(absoluteCodeDir, "userCode.js");
           await fs.writeFile(codeFilePath, code);
-          dockerCommand = `docker run --rm --memory="256m" --cpus="1.0" --pids-limit 100 -v "${absoluteCodeDir.replace(
-            /\\/g,
-            "/"
-          )}:/usr/src/app" node:18 sh -c "node /usr/src/app/${path.basename(
-            codeFilePath
-          )} /usr/src/app/input.txt"`;
+          dockerCommand = `docker run --rm --memory="256m" --cpus="1.0" --pids-limit 100 -v "${absoluteCodeDir}:/usr/src/app" node:18 sh -c "node /usr/src/app/${path.basename(codeFilePath)} /usr/src/app/input.txt"`;
           break;
 
         case "python":
           codeFilePath = path.join(absoluteCodeDir, "userCode.py");
           await fs.writeFile(codeFilePath, code);
-          dockerCommand = `docker run --rm --memory="256m" --cpus="1.0" --pids-limit 100 -v "${absoluteCodeDir.replace(
-            /\\/g,
-            "/"
-          )}:/usr/src/app" python:3.9 sh -c "python /usr/src/app/${path.basename(
-            codeFilePath
-          )} /usr/src/app/input.txt"`;
+          dockerCommand = `docker run --rm --memory="256m" --cpus="1.0" --pids-limit 100 -v "${absoluteCodeDir}:/usr/src/app" python:3.9 sh -c "python /usr/src/app/${path.basename(codeFilePath)} /usr/src/app/input.txt"`;
           break;
 
         case "cpp":
           codeFilePath = path.join(absoluteCodeDir, "userCode.cpp");
           await fs.writeFile(codeFilePath, code);
-          dockerCommand = `docker run --rm --memory="256m" --cpus="1.0" --pids-limit 100 \
--v "${absoluteCodeDir.replace(/\\/g, "/")}:/usr/src/app" gcc:11  \
-sh -c "g++ /usr/src/app/userCode.cpp -o /usr/src/app/a.out && /usr/src/app/a.out < /usr/src/app/input.txt"`;
+          dockerCommand = `docker run --rm --memory="256m" --cpus="1.0" --pids-limit 100 -v "${absoluteCodeDir}:/usr/src/app" gcc:11 sh -c "g++ /usr/src/app/userCode.cpp -o /usr/src/app/a.out && /usr/src/app/a.out < /usr/src/app/input.txt"`;
           break;
 
         case "rust":
