@@ -6,7 +6,7 @@ import { AiOutlineLoading3Quarters } from "react-icons/ai"; // Import spinner ic
 import { socketAtom } from "../atoms/socketAtom";
 import { useNavigate, useParams } from "react-router-dom";
 import { connectedUsersAtom } from "../atoms/connectedUsersAtom";
-import { IP_ADDRESS } from "../Globle";
+import { API_URL } from "../Globle";
 
 type RemotePresence = {
   userId: string;
@@ -434,7 +434,7 @@ const CodeEditor: React.FC = () => {
 
     socket?.send(user?.id ? user.id : "");
 
-    const res = await fetch(`http://${IP_ADDRESS}:3000/submit`, {
+    const res = await fetch(`${API_URL}/submit`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -604,7 +604,7 @@ const CodeEditor: React.FC = () => {
   const handleSaveSnippet = async () => {
     handleButtonStatus("Saving to S3...", true);
     try {
-      const res = await fetch(`http://${IP_ADDRESS}:3000/snippets`, {
+      const res = await fetch(`${API_URL}/snippets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, language }),
@@ -632,7 +632,7 @@ const CodeEditor: React.FC = () => {
     }
     try {
       handleButtonStatus("Loading...", true);
-      const res = await fetch(`http://${IP_ADDRESS}:3000/snippets/${snippetIdInput}`);
+      const res = await fetch(`${API_URL}/snippets/${snippetIdInput}`);
       if (res.ok) {
         const data = await res.json();
         setCode(data.code);
@@ -677,7 +677,7 @@ const CodeEditor: React.FC = () => {
 
     try {
       handleButtonStatus("Deleting...", true);
-      const res = await fetch(`http://${IP_ADDRESS}:3000/snippets/${idToDelete}`, {
+      const res = await fetch(`${API_URL}/snippets/${idToDelete}`, {
         method: "DELETE"
       });
       if (res.ok) {

@@ -3,7 +3,7 @@ import { useRecoilState } from 'recoil';
 import { userAtom } from '../atoms/userAtom';
 import { useNavigate, useParams } from 'react-router-dom';
 import { socketAtom } from '../atoms/socketAtom';
-import { IP_ADDRESS } from '../Globle';
+import { WS_URL } from '../Globle';
 
 const Register = () => {
     const [name, setName] = useState<string>("");
@@ -49,7 +49,7 @@ const Register = () => {
                 setLoading(false);
                 return;
             }
-            const ws = new WebSocket(`ws://${IP_ADDRESS}:5000?roomId=${roomId}&id=${u.id}&name=${u.name}`);
+            const ws = new WebSocket(`${WS_URL}?roomId=${roomId}&id=${u.id}&name=${u.name}`);
           
             setSocket(ws);
 

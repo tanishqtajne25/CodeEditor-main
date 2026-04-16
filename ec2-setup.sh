@@ -1,29 +1,33 @@
 #!/bin/bash
-# CodeEditor EC2 Deployment Script (Launch Template User Data)
-# Ubuntu 24.04 LTS — Docker Redis (local, free-tier safe)
-# This script is pasted verbatim into the Launch Template "User Data" field.
+# ============================================================
+# CodeEditor — EC2 Launch Template User Data
+# Ubuntu 24.04 LTS | Docker Redis (local) | PM2
+# Frontend is hosted on Vercel — NO frontend build here.
+# ============================================================
 
-set -e  # Exit on any error
+set -e
 
-# ── 0. Swap space (t3.micro = 1 GB RAM; npm build needs breathing room) ──────
+# ── 0. Swap space (t3.micro = 1 GB RAM; npm install needs more) ──────────────
 fallocate -l 2G /swapfile
 chmod 600 /swapfile
 mkswap /swapfile
 swapon /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab   # persist across reboots
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
-# ── 1. System packages ─────────────────────────────────────────────────────────
+# ── 1. System packages ────────────────────────────────────────────────────────
 apt-get update -y
 apt-get install -y curl git apt-transport-https ca-certificates \
                    software-properties-common
 
-# ── 2. Node.js v20 ────────────────────────────────────────────────────────────
+# ── 2. Node.js v20 ───────────────────────────────────────────────────────────
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 apt-get install -y nodejs
 
-# ── 3. Docker (used for Redis + code-execution sandboxes) ─────────────────────
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+# ── 3. Docker (for Redis + sandboxed code execution) ─────────────────────────
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | gpg --dearmor -o /usr/share/keyrings/docker.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
   > /etc/apt/sources.list.d/docker.list
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io
@@ -31,7 +35,7 @@ systemctl enable docker
 systemctl start docker
 usermod -aG docker ubuntu
 
-# ── 4. Start Redis (local, Docker-based — free-tier safe) ─────────────────────
+# ── 4. Start Redis locally (Docker) ──────────────────────────────────────────
 docker run -d \
   --name redis-server \
   --restart unless-stopped \
@@ -42,10 +46,10 @@ docker run -d \
 git clone https://github.com/tanishqtajne25/CodeEditor-main.git /home/ubuntu/CodeEditor
 cd /home/ubuntu/CodeEditor
 
-# ── 6. Environment variables ──────────────────────────────────────────────────
-# Redis points to the local Docker container on this same instance.
-# AWS credentials are picked up from the attached IAM Instance Profile (CodeEditor-EC2-Role).
-# VITE_BACKEND_HOST must match your ALB DNS name — set it BEFORE running npm run build.
+# ── 6. Environment variables ─────────────────────────────────────────────────
+# All three backend services use the local Docker Redis.
+# IAM Instance Profile (CodeEditor-EC2-Role) provides S3 + DynamoDB access
+# — no AWS keys needed here.
 
 cat > apps/express-server/.env << 'ENVEOF'
 REDIS_URL=redis://localhost:6379
@@ -61,20 +65,14 @@ cat > apps/worker/.env << 'ENVEOF'
 REDIS_URL=redis://localhost:6379
 ENVEOF
 
-# Frontend: embed the ALB DNS name at build time
-# Replace the value below with your actual ALB DNS before baking the AMI!
-cat > apps/frontend/.env << 'ENVEOF'
-VITE_BACKEND_HOST=CodeEditor-ALB-1911604777.ap-south-1.elb.amazonaws.com
-ENVEOF
-
-# ── 7. Install dependencies & build all packages ──────────────────────────────
+# ── 7. Install dependencies & build backend packages ─────────────────────────
 npm install
 npm run build
 
 # ── 8. Fix ownership ──────────────────────────────────────────────────────────
 chown -R ubuntu:ubuntu /home/ubuntu/CodeEditor
 
-# ── 9. Install PM2 and start all 3 backend services ──────────────────────────
+# ── 9. Start backend services with PM2 ───────────────────────────────────────
 npm install -g pm2
 
 sudo -u ubuntu bash -c '
@@ -85,10 +83,14 @@ sudo -u ubuntu bash -c '
   pm2 save
 '
 
-# Make PM2 auto-start on system reboot
+# Persist PM2 across reboots
 env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
 
-echo "=== CodeEditor deployment complete! ==="
-echo "  Express  -> http://localhost:3000"
-echo "  WS       -> ws://localhost:5000"
-echo "  Redis    -> localhost:6379 (Docker)"
+echo "============================================"
+echo " CodeEditor backend deployment complete!"
+echo "  Express      -> http://localhost:3000"
+echo "  WebSocket    -> ws://localhost:5000"
+echo "  Redis        -> localhost:6379 (Docker)"
+echo "  ALB routes:  :80  -> Express"
+echo "               :8080 -> WebSocket"
+echo "============================================"
