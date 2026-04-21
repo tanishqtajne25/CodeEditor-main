@@ -106,7 +106,9 @@ app.post("/snippets", async (req, res) => {
         SnippetID: snippetId,
         Language: normalizedLanguage,
         RoomID: normalizedRoomId,
+        RoomCreator: normalizedRoomId,
         Users: normalizedUsers,
+        people: normalizedUsers,
         CodeSnippet: code,
         CreatedAt: new Date().toISOString()
       }
@@ -133,13 +135,13 @@ app.get("/snippets/:id", async (req, res) => {
       return res.status(404).json({ error: "Snippet not found in DynamoDB" });
     }
 
-    const { CodeSnippet, Language, RoomID, Users, CreatedAt } = ddbResponse.Item;
+    const { CodeSnippet, Language, RoomID, RoomCreator, Users, people, CreatedAt } = ddbResponse.Item;
 
     res.status(200).json({ 
       code: CodeSnippet || "", 
       language: Language || "javascript", 
-      roomId: RoomID, 
-      users: Array.isArray(Users) ? Users : [], 
+      roomId: RoomID || RoomCreator, 
+      users: Array.isArray(Users) ? Users : (Array.isArray(people) ? people : []), 
       createdAt: CreatedAt 
     });
   } catch (error) {
