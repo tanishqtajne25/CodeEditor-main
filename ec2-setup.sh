@@ -66,7 +66,7 @@ ENVEOF
 
 # ── 7. Install dependencies & build backend packages ─────────────────────────
 npm install
-npm run build
+npx turbo run build --filter=express-server --filter=websocket-server --filter=worker
 
 # ── 8. Fix ownership ──────────────────────────────────────────────────────────
 chown -R ubuntu:ubuntu /home/ubuntu/CodeEditor
