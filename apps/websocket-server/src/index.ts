@@ -5,7 +5,15 @@ import { createClient } from "redis";
 import dotenv from "dotenv";
 dotenv.config();
 
-const server = http.createServer();
+const server = http.createServer((req, res) => {
+  if (req.url === '/health' || req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('WebSocket Server Healthy');
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
 const wss = new WebSocketServer({ server });
 
 const pubSubClient = createClient(
