@@ -48,13 +48,12 @@ cd /home/ubuntu/CodeEditor
 
 # ── 6. Environment variables ─────────────────────────────────────────────────
 # All three backend services use the local Docker Redis.
-# IAM Instance Profile (CodeEditor-EC2-Role) provides S3 + DynamoDB access
+# IAM Instance Profile (CodeEditor-EC2-Role) provides DynamoDB access
 # — no AWS keys needed here.
 
 cat > apps/express-server/.env << 'ENVEOF'
 REDIS_URL=redis://localhost:6379
 AWS_REGION=ap-south-1
-AWS_S3_BUCKET_NAME=code-editor-snippets-tanishq
 ENVEOF
 
 cat > apps/websocket-server/.env << 'ENVEOF'

@@ -2,9 +2,15 @@ import http from "http";
 import { WebSocketServer } from "ws";
 import { createClient } from "redis";
 
+import dotenv from "dotenv";
+dotenv.config();
+
 const server = http.createServer();
 const wss = new WebSocketServer({ server });
-const pubSubClient = createClient();
+
+const pubSubClient = createClient(
+  process.env.REDIS_URL ? { url: process.env.REDIS_URL } : undefined
+);
 
 // Storage for rooms and their users
 const rooms: any = {};
@@ -49,7 +55,7 @@ function generateRoomId() {
   return id;
 }
 
-async function process() {
+async function processConnections() {
   pubSubClient.on("error", (err) =>
     console.log("Redis PubSub Client Error", err)
   );
@@ -304,7 +310,7 @@ async function process() {
 async function main() {
   try {
     await pubSubClient.connect();
-    await process();
+    await processConnections();
     console.log("Redis Client Connected");
   } catch (error) {
     console.log("Failed to connect to Redis", error);

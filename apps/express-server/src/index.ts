@@ -11,7 +11,9 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-const redisClient = createClient();
+const redisClient = createClient(
+  process.env.REDIS_URL ? { url: process.env.REDIS_URL } : undefined
+);
 
 redisClient.on("error", (err) => console.log("Redis Client Error", err));
 
@@ -39,17 +41,22 @@ app.post("/submit", async (req, res) => {
   }
 });
 
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, GetCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 
-const s3Client = new S3Client({
+const dynamodbClient = new DynamoDBClient({
   region: process.env.AWS_REGION as string,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID as string,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY as string,
-  },
 });
-
-const BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME as string;
+const ddbDocClient = DynamoDBDocumentClient.from(dynamodbClient);
+const TABLE_NAME = process.env.SNIPPETS_TABLE_NAME || "Snippets";
+const ALLOWED_LANGUAGES = new Set([
+  "javascript",
+  "python",
+  "cpp",
+  "java",
+  "rust",
+  "go",
+]);
 
 const getExtension = (language: string) => {
     switch (language) {
@@ -65,67 +72,99 @@ const getExtension = (language: string) => {
 
 app.post("/snippets", async (req, res) => {
   try {
-    const { code, language } = req.body;
-    const snippetId = `snippet-${Date.now()}${getExtension(language)}`;
-    
-    const command = new PutObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: snippetId,
-      Body: code,
-      ContentType: "text/plain",
-    });
+    const { code, language, roomId, users } = req.body;
+    if (typeof code !== "string" || !code.trim()) {
+      return res.status(400).json({ error: "Code snippet is required" });
+    }
 
-    await s3Client.send(command);
+    const normalizedLanguage =
+      typeof language === "string" ? language.trim().toLowerCase() : "";
+
+    if (!ALLOWED_LANGUAGES.has(normalizedLanguage)) {
+      return res.status(400).json({ error: "Unsupported language" });
+    }
+
+    const normalizedRoomId =
+      typeof roomId === "string" && roomId.trim() ? roomId.trim() : "unknown";
+
+    const normalizedUsers = Array.isArray(users)
+      ? Array.from(
+          new Set(
+            users
+              .filter((user): user is string => typeof user === "string")
+              .map((user) => user.trim())
+              .filter((user) => user.length > 0)
+          )
+        )
+      : [];
+
+    const snippetId = `snippet-${Date.now()}${getExtension(normalizedLanguage)}`;
+
+    await ddbDocClient.send(new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        SnippetID: snippetId,
+        Language: normalizedLanguage,
+        RoomID: normalizedRoomId,
+        Users: normalizedUsers,
+        CodeSnippet: code,
+        CreatedAt: new Date().toISOString()
+      }
+    }));
+
     res.status(200).json({ snippetId });
   } catch (error) {
-    console.error("Error saving to S3:", error);
-    res.status(500).json({ error: "Failed to save snippet" });
+    console.error("Error saving snippet:", error);
+    const message = error instanceof Error ? error.message : "Failed to save snippet";
+    res.status(500).json({ error: message });
   }
 });
 
 app.get("/snippets/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const command = new GetObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: id,
-    });
-
-    const response = await s3Client.send(command);
-    const code = await response.Body?.transformToString();
     
-    // Infer language from extension
-    let language = "javascript";
-    if (id.endsWith(".py")) language = "python";
-    if (id.endsWith(".cpp")) language = "cpp";
-    if (id.endsWith(".java")) language = "java";
-    if (id.endsWith(".rs")) language = "rust";
-    if (id.endsWith(".go")) language = "go";
+    const ddbResponse = await ddbDocClient.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { SnippetID: id }
+    }));
 
-    res.status(200).json({ code, language });
+    if (!ddbResponse.Item) {
+      return res.status(404).json({ error: "Snippet not found in DynamoDB" });
+    }
+
+    const { CodeSnippet, Language, RoomID, Users, CreatedAt } = ddbResponse.Item;
+
+    res.status(200).json({ 
+      code: CodeSnippet || "", 
+      language: Language || "javascript", 
+      roomId: RoomID, 
+      users: Array.isArray(Users) ? Users : [], 
+      createdAt: CreatedAt 
+    });
   } catch (error) {
-    console.error("Error retrieving from S3:", error);
-    res.status(404).json({ error: "Snippet not found" });
+    console.error("Error retrieving snippet:", error);
+    res.status(500).json({ error: "Failed to retrieve snippet" });
   }
 });
 
 app.delete("/snippets/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const command = new DeleteObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: id,
-    });
 
-    await s3Client.send(command);
+    await ddbDocClient.send(new DeleteCommand({
+      TableName: TABLE_NAME,
+      Key: { SnippetID: id }
+    }));
+
     res.status(200).json({ message: "Snippet deleted successfully" });
   } catch (error) {
-    console.error("Error deleting from S3:", error);
+    console.error("Error deleting from DynamoDB:", error);
     res.status(500).json({ error: "Failed to delete snippet" });
   }
 });
 
-const server = app.listen(3000, '0.0.0.0', () => {
+app.listen(3000, '0.0.0.0', () => {
   console.log("Express Server Listening on port 3000");
 });
 

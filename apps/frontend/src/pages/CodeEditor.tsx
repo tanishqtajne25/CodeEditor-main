@@ -602,12 +602,36 @@ const CodeEditor: React.FC = () => {
   const [snippetIdLoaded, setSnippetIdLoaded] = useState("");
 
   const handleSaveSnippet = async () => {
-    handleButtonStatus("Saving to S3...", true);
+    handleButtonStatus("Saving to Database...", true);
     try {
+      const normalizedRoomId = (user.roomId || parms.roomId || "").trim();
+      const allUsers = Array.from(
+        new Set(
+          [user.name, ...connectedUsers.map((u: any) => u.name)]
+            .map((name) => String(name || "").trim())
+            .filter((name) => name.length > 0)
+        )
+      );
+
+      if (!normalizedRoomId) {
+        alert("Room ID is missing. Rejoin the room and try again.");
+        return;
+      }
+
+      if (!String(code || "").trim()) {
+        alert("Cannot save an empty snippet.");
+        return;
+      }
+
       const res = await fetch(`${API_URL}/snippets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, language }),
+        body: JSON.stringify({
+          code,
+          language,
+          roomId: normalizedRoomId,
+          users: allUsers,
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -616,11 +640,17 @@ const CodeEditor: React.FC = () => {
         setSnippetIdLoaded(data.snippetId);
         setOutput((prevOutput) => [...prevOutput, `Snippet saved with ID: ${data.snippetId}`]);
       } else {
-        alert("Failed to save snippet.");
+        const errorData = await res.json().catch(() => null);
+        alert(errorData?.error ?? "Failed to save snippet.");
       }
     } catch (error) {
        console.error(error);
-       alert("Error saving snippet.");
+       const networkMessage =
+         error instanceof TypeError
+           ? "Network error while saving snippet. Check VITE_API_URL, backend reachability, and browser mixed-content/CORS restrictions."
+           : "Error saving snippet.";
+       alert(networkMessage);
+       setOutput((prevOutput) => [...prevOutput, networkMessage]);
     } finally {
       handleButtonStatus("Submit Code", false);
     }
@@ -673,7 +703,7 @@ const CodeEditor: React.FC = () => {
        alert("No snippet ID specified to delete."); return;
     }
     
-    if (!confirm(`Are you sure you want to delete ${idToDelete} from S3?`)) return;
+    if (!confirm(`Are you sure you want to delete ${idToDelete} from the database?`)) return;
 
     try {
       handleButtonStatus("Deleting...", true);
@@ -728,7 +758,7 @@ const CodeEditor: React.FC = () => {
             </div>
             {snippetIdLoaded && (
                <div className="mt-2 text-xs text-[#007acc] truncate pl-2">
-                 AWS S3 Snippet Loaded: <br /> <span className="text-[#d4d4d4]">{snippetIdLoaded}</span>
+                 AWS DynamoDB Snippet Loaded: <br /> <span className="text-[#d4d4d4]">{snippetIdLoaded}</span>
                </div>
             )}
           </div>
@@ -765,7 +795,7 @@ const CodeEditor: React.FC = () => {
 
             <div className="flex-1 flex justify-center gap-2 items-center px-4">
                  <button onClick={handleSaveSnippet} className="px-2 py-1 text-xs rounded bg-[#4caf50] text-white hover:bg-[#45a049] transition-colors">
-                    Save to S3
+                    Save to DB
                  </button>
                  <input 
                     type="text" 
