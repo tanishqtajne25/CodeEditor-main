@@ -17,6 +17,10 @@ const redisClient = createClient(
 
 redisClient.on("error", (err) => console.log("Redis Client Error", err));
 
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
 app.post("/submit", async (req, res) => {
   const { code, language, roomId, input } = req.body;
   const submissionId = `submission-${Date.now()}-${roomId}`;
